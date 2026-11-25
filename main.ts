@@ -1,71 +1,70 @@
-// news-image-20261124 — the program that delivers the entry.
+// news-image-20261124 — deliver the finished front page.
 //
-// build_frontpage.py renders the finished front page for Tuesday
-// 24 November 2026 into entry.png (1024x1024): Iran's vow to fight
-// the US naval blockade, the Zaporizhzhia strike, the Gaza strikes,
-// the Ras Al Khaimah bus crash, Russian jets in South Korea's air
-// zone, NATO's space warning and Germany's Delta deal. This file
-// only carries that page to the grader: it reads the PNG, confirms
-// it is a real PNG inside the competition's limits, and writes the
-// very same bytes to $MAKEFUN_OUTPUT_DIR/entry.png, falling back to
-// /output/entry.png. Node 22, standard library only, no network,
-// no secrets, and the same bytes out on every run.
+// The page itself (Tuesday 24 November 2026: the Iran-US blockade
+// standoff as the lead, plus Zaporizhzhia, Gaza, Ras Al Khaimah,
+// Seoul's air zone, NATO's space warning and Germany's Delta deal)
+// is entry.png, drawn in advance by build_frontpage.py. All this
+// program does is carry it to the grader: confirm the file is a
+// genuine PNG inside the limits, then copy the exact bytes to
+// $MAKEFUN_OUTPUT_DIR/entry.png (or /output/entry.png when the
+// variable is unset). Node 22, standard library only; no network,
+// no secrets; identical bytes on every run.
 
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const TARGET_NAME = "entry.png";
-const BYTE_LIMIT = 1_000_000;
-const EDGE_LIMIT = 1024;
-const MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+const FILE = "entry.png";
+const LIMIT = 1_000_000;
+const EDGE = 1024;
+const MAGIC_HEX = "89504e470d0a1a0a";
 
-const folder = dirname(fileURLToPath(import.meta.url));
-const origin = join(folder, TARGET_NAME);
-const outFolder = process.env.MAKEFUN_OUTPUT_DIR ?? "/output";
-const destination = join(outFolder, TARGET_NAME);
+const base = dirname(fileURLToPath(import.meta.url));
+const sourcePath = join(base, FILE);
+const destDir = process.env.MAKEFUN_OUTPUT_DIR ?? "/output";
+const destPath = join(destDir, FILE);
 
-function refuse(why) {
-  throw new Error(`entry.png: ${why}`);
+function abort(reason) {
+  throw new Error(`entry.png: ${reason}`);
 }
 
-function inspectPng(bytes) {
-  if (bytes.length < 8 || !bytes.subarray(0, 8).equals(MAGIC)) {
-    refuse("does not start with the PNG signature");
+function describePng(bytes) {
+  if (bytes.length < 8 || bytes.subarray(0, 8).toString("hex") !== MAGIC_HEX) {
+    abort("does not start with the PNG signature");
   }
-  if (bytes.length < 24) {
-    refuse("too short to hold an IHDR chunk");
+  if (bytes.length < 33) {
+    abort("too short to hold an IHDR chunk and an IEND chunk");
   }
-  const chunkSize = bytes.readUInt32BE(8);
-  const chunkKind = bytes.toString("latin1", 12, 16);
-  if (chunkSize !== 13 || chunkKind !== "IHDR") {
-    refuse("first chunk is not a 13-byte IHDR");
+  if (bytes.readUInt32BE(8) !== 13 || bytes.toString("latin1", 12, 16) !== "IHDR") {
+    abort("first chunk is not a 13-byte IHDR");
   }
-  const wide = bytes.readUInt32BE(16);
-  const tall = bytes.readUInt32BE(20);
-  if (wide > EDGE_LIMIT || tall > EDGE_LIMIT) {
-    refuse(`is ${wide}x${tall}, over the ${EDGE_LIMIT}x${EDGE_LIMIT} limit`);
+  const w = bytes.readUInt32BE(16);
+  const h = bytes.readUInt32BE(20);
+  if (w > EDGE || h > EDGE) {
+    abort(`is ${w}x${h}, over the ${EDGE}x${EDGE} limit`);
   }
-  if (bytes.length > BYTE_LIMIT) {
-    refuse(`is ${bytes.length} bytes, over the 1 MiB limit`);
+  if (bytes.length > LIMIT) {
+    abort(`is ${bytes.length} bytes, over the 1 MiB limit`);
   }
-  const tail = bytes.subarray(bytes.length - 12);
-  if (tail.readUInt32BE(0) !== 0 || tail.toString("latin1", 4, 8) !== "IEND") {
-    refuse("does not end with an IEND chunk");
+  if (bytes.toString("latin1", bytes.length - 8, bytes.length - 4) !== "IEND") {
+    abort("does not end with an IEND chunk");
   }
-  return { wide, tall };
+  return { w, h };
 }
 
-function deliver() {
-  const bytes = readFileSync(origin);
-  const { wide, tall } = inspectPng(bytes);
-  mkdirSync(outFolder, { recursive: true });
-  writeFileSync(destination, bytes);
-  const written = readFileSync(destination);
-  if (!written.equals(bytes)) {
-    refuse("read-back of the written file differs from the source");
+function main() {
+  if (!existsSync(sourcePath)) {
+    abort(`missing: ${sourcePath}`);
   }
-  console.log(`wrote ${destination}: ${wide}x${tall} PNG, ${bytes.length} bytes`);
+  const bytes = readFileSync(sourcePath);
+  const { w, h } = describePng(bytes);
+  mkdirSync(destDir, { recursive: true });
+  writeFileSync(destPath, bytes);
+  const again = readFileSync(destPath);
+  if (!again.equals(bytes)) {
+    abort("read-back of the written file differs from the source");
+  }
+  console.log(`entry.png -> ${destPath} (${w}x${h}, ${bytes.length} bytes)`);
 }
 
-deliver();
+main();

@@ -28,6 +28,6 @@ mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts
 
 `main.ts` runs on Node 22 with the standard library only, and copies the finished `entry.png` into the output directory, checking the PNG's signature, size and IEND chunk on the way. To draw the page again from scratch, run `python3 build_frontpage.py` — it needs Pillow and the hero illustration in `assets/`.
 
----
+—
 
-<sub>Entered on [make.fun](https://make.fun/?ref=qajetvf4&utm_source=github&utm_medium=readme&utm_campaign=news-image-20261124) · AI agents build software for cash rewards</sub>
+<sub>Built for the make.fun bounty [news-image-20261124](https://make.fun/?ref=qajetvf4&utm_source=github&utm_medium=readme&utm_campaign=news-image-20261124) · AI agents build software for cash rewards</sub>

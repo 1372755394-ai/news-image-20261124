@@ -1,302 +1,277 @@
 #!/usr/bin/env python3
-"""Draw THE WORLD's front page for Tuesday 24 November 2026.
+"""Draw the front page of THE WORLD for Tuesday 24 November 2026.
 
-The page is a 1024x1024 PNG: masthead, lead story on the Iran-US naval
-blockade standoff, a wide illustration strip, a numbers ticker, six
-stories in two columns and an ALSO footer. All headlines and figures
-come from the story list in README.md, verified against live reporting
-on the morning of 25 November 2026 (Beijing time). The only picture is
-the illustration already generated into assets/; all lettering is
-drawn here with Pillow. Runs offline; no secrets anywhere.
+Everything on the page comes from README.md: the Iran-US blockade
+standoff as the lead, the Zaporizhzhia strike, the Gaza strikes, the
+Ras Al Khaimah bus crash, Russian jets in Seoul's air zone, NATO's
+space warning and Germany's Delta deal, each verified against live
+reporting on the morning of 25 November 2026 (Beijing time). The
+picture strip uses the illustration already sitting in assets/;
+every letter is drawn here. The result is a 1024x1024 PNG under
+1 MiB. Pillow only, no network, no secrets.
 """
 
 import os
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageOps
 
-BASE = os.path.dirname(os.path.abspath(__file__))
-ILLUSTRATION = os.path.join(
-    BASE,
+ROOT = os.path.dirname(os.path.abspath(__file__))
+PICTURE = os.path.join(
+    ROOT,
     "assets",
     "media-generation-hero-naval-blockade-strait-0-8cb99087-db04-406d-b7be-e16827d7a76b.webp",
 )
-DESTINATION = os.path.join(BASE, "entry.png")
+TARGET = os.path.join(ROOT, "entry.png")
 
-EDGE = 1024
-SIDE = 40
-INNER = EDGE - 2 * SIDE
-BYTE_CAP = 1_000_000
+CANVAS_EDGE = 1024
+EDGE_GAP = 40
+TEXT_WIDTH = CANVAS_EDGE - 2 * EDGE_GAP
+SIZE_CAP = 1_000_000
+STRIP_HEIGHT = 140
 
-CREAM = (247, 241, 229)
-BLACK = (17, 17, 17)
-SLATE = (68, 60, 52)
-WINE = (143, 29, 29)
-MIDNIGHT = (27, 42, 74)
-SNOW = (255, 255, 255)
+PALETTE = {
+    "paper": (247, 241, 229),
+    "ink": (17, 17, 17),
+    "grey": (68, 60, 52),
+    "red": (143, 29, 29),
+    "navy": (27, 42, 74),
+    "white": (255, 255, 255),
+}
 
-LIB = "/usr/share/fonts/truetype/liberation/"
-
-
-def load(name, size):
-    return ImageFont.truetype(os.path.join(LIB, name), size)
-
-
-def bold_serif(size):
-    return load("LiberationSerif-Bold.ttf", size)
-
-
-def plain_serif(size):
-    return load("LiberationSerif-Regular.ttf", size)
+FACES = {
+    "serif_b": "LiberationSerif-Bold.ttf",
+    "serif": "LiberationSerif-Regular.ttf",
+    "serif_i": "LiberationSerif-Italic.ttf",
+    "sans_b": "LiberationSans-Bold.ttf",
+}
+FONT_HOME = "/usr/share/fonts/truetype/liberation/"
 
 
-def italic_serif(size):
-    return load("LiberationSerif-Italic.ttf", size)
+def face(kind, size):
+    return ImageFont.truetype(os.path.join(FONT_HOME, FACES[kind]), size)
 
 
-def bold_sans(size):
-    return load("LiberationSans-Bold.ttf", size)
+def measure(draw, text, font):
+    return draw.textlength(text, font=font)
 
 
-def shrink_to_fit(draw, wording, name, top_size, widest):
-    """Largest size at which wording fits widest, stepping down by 2."""
-    size = top_size
+def fit_to_width(draw, text, kind, biggest, width):
+    """Shrink the point size until the text fits, two points at a time."""
+    size = biggest
     while size > 10:
-        trial = load(name, size)
-        if draw.textlength(wording, font=trial) <= widest:
-            return trial
+        candidate = face(kind, size)
+        if measure(draw, text, candidate) <= width:
+            return candidate
         size -= 2
-    return load(name, 10)
+    return face(kind, 10)
 
 
-def split_lines(draw, wording, face, widest):
-    """Greedy word wrap measured with the real font."""
+def break_text(draw, text, font, width):
+    """Greedy pixel-exact wrap, walked with an index pointer.
+
+    Words are consumed left to right; each row takes the longest run
+    of words that still measures within the width.
+    """
+    words = text.split()
     rows = []
-    current = ""
-    for piece in wording.split():
-        joined = f"{current} {piece}".strip()
-        if not current or draw.textlength(joined, font=face) <= widest:
-            current = joined
-        else:
-            rows.append(current)
-            current = piece
-    if current:
-        rows.append(current)
+    first = 0
+    while first < len(words):
+        last = first
+        row = ""
+        while last < len(words):
+            trial = (row + " " + words[last]).strip()
+            if row and measure(draw, trial, font) > width:
+                break
+            row, last = trial, last + 1
+        rows.append(row)
+        first = last
     return rows
 
 
-class Sheet:
-    """A blank newsprint page with a vertical cursor."""
+def centred(draw, top, text, font, colour):
+    x = (CANVAS_EDGE - measure(draw, text, font)) / 2
+    draw.text((x, top), text, font=font, fill=colour)
 
-    def __init__(self):
-        self.canvas = Image.new("RGB", (EDGE, EDGE), CREAM)
-        self.pen = ImageDraw.Draw(self.canvas)
-        self.cursor = 22
 
-    def width_of(self, wording, face):
-        return self.pen.textlength(wording, font=face)
+def letterspaced(draw, top, text, font, step, colour):
+    spans = [measure(draw, ch, font) for ch in text]
+    total = sum(spans) + step * (len(text) - 1)
+    x = CANVAS_EDGE / 2 - total / 2
+    for glyph, span in zip(text, spans):
+        draw.text((x, top), glyph, font=font, fill=colour)
+        x += span + step
 
-    def put_centred(self, top, wording, face, colour=BLACK):
-        self.pen.text(
-            ((EDGE - self.width_of(wording, face)) / 2, top),
-            wording, font=face, fill=colour,
-        )
 
-    def put_tracked(self, top, wording, face, tracking, colour=BLACK):
-        spans = [self.width_of(ch, face) for ch in wording]
-        whole = sum(spans) + tracking * (len(wording) - 1)
-        x = EDGE // 2 - whole / 2
-        for glyph, span in zip(wording, spans):
-            self.pen.text((x, top), glyph, font=face, fill=colour)
-            x += span + tracking
+def rule(draw, top, weight):
+    draw.line(
+        [(EDGE_GAP, top), (CANVAS_EDGE - EDGE_GAP, top)],
+        fill=PALETTE["ink"], width=weight,
+    )
 
-    def rule(self, top, thickness, left=SIDE, right=EDGE - SIDE):
-        self.pen.line([(left, top), (right, top)], fill=BLACK, width=thickness)
 
-    def banner(self):
-        self.put_tracked(self.cursor, "ONE DAY · ONE PAGE", bold_sans(15), 6, SLATE)
-        self.cursor += 30
-        masthead = shrink_to_fit(
-            self.pen, "THE WORLD", "LiberationSerif-Bold.ttf", 118, INNER)
-        self.put_centred(self.cursor - 14, "THE WORLD", masthead)
-        self.cursor += 98
-        self.rule(self.cursor, 3)
-        self.cursor += 5
-        self.rule(self.cursor, 1)
-        self.cursor += 12
-        self.put_centred(
-            self.cursor, "TUESDAY,  24 NOVEMBER 2026", bold_serif(30), WINE)
-        self.cursor += 42
-        self.rule(self.cursor, 1)
-        self.cursor += 14
+def draw_masthead(draw, y):
+    letterspaced(draw, y, "ONE DAY · ONE PAGE", face("sans_b", 15), 6,
+                 PALETTE["grey"])
+    y += 30
+    title = fit_to_width(draw, "THE WORLD", "serif_b", 118, TEXT_WIDTH)
+    centred(draw, y - 14, "THE WORLD", title, PALETTE["ink"])
+    y += 98
+    rule(draw, y, 3)
+    y += 5
+    rule(draw, y, 1)
+    y += 12
+    centred(draw, y, "TUESDAY,  24 NOVEMBER 2026", face("serif_b", 30),
+            PALETTE["red"])
+    y += 42
+    rule(draw, y, 1)
+    return y + 14
 
-    def headline_block(self):
-        top_story = "IRAN VOWS TO FIGHT US BLOCKADE"
-        face = shrink_to_fit(
-            self.pen, top_story, "LiberationSerif-Bold.ttf", 56, INNER)
-        self.put_centred(self.cursor, top_story, face)
-        self.cursor += 56
-        standfirst = (
-            "Tehran says it will use \u201call available means\u201d "
-            "against the US naval blockade as Vance and Rubio meet "
-            "Qatar\u2019s prime minister at the White House"
-        )
-        body = plain_serif(22)
-        for row in split_lines(self.pen, standfirst, body, INNER - 40):
-            self.put_centred(self.cursor, row, body)
-            self.cursor += 26
-        self.cursor += 8
 
-    def picture_strip(self):
-        shot = Image.open(ILLUSTRATION).convert("RGB")
-        want = INNER / 140
-        wide, tall = shot.size
-        if wide / tall > want:
-            keep = int(tall * want)
-            start = (wide - keep) // 2
-            shot = shot.crop((start, 0, start + keep, tall))
-        else:
-            keep = int(wide / want)
-            start = (tall - keep) // 2
-            shot = shot.crop((0, start, wide, start + keep))
-        shot = shot.resize((INNER, 140), Image.LANCZOS)
-        self.canvas.paste(shot, (SIDE, self.cursor))
-        self.pen.rectangle(
-            [SIDE, self.cursor, EDGE - SIDE, self.cursor + 140],
-            outline=BLACK, width=1)
-        self.cursor += 140 + 8
-        self.pen.text(
-            (SIDE, self.cursor),
-            "A blockade at sea: warships enforce the cordon as Iran vows "
-            "resistance. (Illustration)",
-            font=italic_serif(16), fill=SLATE)
-        self.cursor += 14
+def draw_lead(draw, y):
+    headline = "IRAN VOWS TO FIGHT US BLOCKADE"
+    big = fit_to_width(draw, headline, "serif_b", 56, TEXT_WIDTH)
+    centred(draw, y, headline, big, PALETTE["ink"])
+    y += 56
+    deck = (
+        "Tehran says it will use \u201call available means\u201d against "
+        "the US naval blockade as Vance and Rubio meet Qatar\u2019s prime "
+        "minister at the White House"
+    )
+    small = face("serif", 22)
+    for line in break_text(draw, deck, small, TEXT_WIDTH - 40):
+        centred(draw, y, line, small, PALETTE["ink"])
+        y += 26
+    return y + 8
 
-    def number_bar(self):
-        tall = 36
-        self.pen.rectangle(
-            [SIDE, self.cursor, EDGE - SIDE, self.cursor + tall],
-            fill=MIDNIGHT)
-        figures = (
-            "ZAPORIZHZHIA: 2 KILLED, 40 WOUNDED  ·  GAZA: HAMAS "
-            "SECURITY CHIEF KILLED  ·  UAE BUS CRASH: 13 DEAD"
-        )
-        face = shrink_to_fit(
-            self.pen, figures, "LiberationSans-Bold.ttf", 19, INNER - 16)
-        self.put_centred(self.cursor + 8, figures, face, SNOW)
-        self.cursor += tall + 6
 
-    def story(self, left, top, wide, tag, head, text):
-        y = top
-        self.pen.text((left, y), tag, font=bold_sans(15), fill=WINE)
+def draw_picture(page, draw, y):
+    shot = Image.open(PICTURE).convert("RGB")
+    fitted = ImageOps.fit(shot, (TEXT_WIDTH, STRIP_HEIGHT))
+    page.paste(fitted, (EDGE_GAP, y))
+    draw.rectangle(
+        [EDGE_GAP, y, CANVAS_EDGE - EDGE_GAP, y + STRIP_HEIGHT],
+        outline=PALETTE["ink"], width=1)
+    y += STRIP_HEIGHT + 8
+    draw.text(
+        (EDGE_GAP, y),
+        "A blockade at sea: warships enforce the cordon as Iran vows "
+        "resistance. (Illustration)",
+        font=face("serif_i", 16), fill=PALETTE["grey"])
+    return y + 14
+
+
+def draw_ticker(draw, y):
+    bar = 36
+    draw.rectangle(
+        [EDGE_GAP, y, CANVAS_EDGE - EDGE_GAP, y + bar],
+        fill=PALETTE["navy"])
+    parts = [
+        "ZAPORIZHZHIA: 2 KILLED, 40 WOUNDED",
+        "GAZA: HAMAS SECURITY CHIEF KILLED",
+        "UAE BUS CRASH: 13 DEAD",
+    ]
+    line = "  ·  ".join(parts)
+    font = fit_to_width(draw, line, "sans_b", 19, TEXT_WIDTH - 16)
+    centred(draw, y + 8, line, font, PALETTE["white"])
+    return y + bar + 6
+
+
+def draw_story(draw, x, y, width, tag, headline, body):
+    draw.text((x, y), tag, font=face("sans_b", 15), fill=PALETTE["red"])
+    y += 22
+    head_font = face("serif_b", 25)
+    for line in break_text(draw, headline, head_font, width):
+        draw.text((x, y), line, font=head_font, fill=PALETTE["ink"])
+        y += 28
+    y += 2
+    body_font = face("serif", 17)
+    for line in break_text(draw, body, body_font, width):
+        draw.text((x, y), line, font=body_font, fill=PALETTE["ink"])
+        y += 21
+    return y + 10
+
+
+STORIES = [
+    ("UKRAINE", "Russian strike kills 2 in Zaporizhzhia",
+     "An overnight attack hits an apartment block: two dead and 40 "
+     "wounded, including four children, the regional governor says."),
+    ("UNITED ARAB EMIRATES", "Bus crash kills 13 in Ras Al Khaimah",
+     "A bus carrying 41 people hits a broken-down truck on Al Watan "
+     "Road in the early hours; 14 more are injured, police say."),
+    ("GAZA", "Israel kills Hamas security chief",
+     "Airstrikes kill Naeem Abu Nahel, director of Hamas\u2019 internal "
+     "security, and six others, including two police officers, medics "
+     "say."),
+    ("NATO", "Rutte vows space defence after reports",
+     "The alliance will defend against threats in space, its chief "
+     "says, after reports Russia is preparing to launch a "
+     "nuclear-armed satellite."),
+    ("KOREA", "Russian jets enter Seoul\u2019s air zone",
+     "Several Russian aircraft fly into South Korea\u2019s air defence "
+     "identification zone over waters between the peninsula and Japan."),
+    ("BERLIN", "Germany first to tap Ukraine\u2019s Delta",
+     "Berlin signs a letter of intent for access to Ukraine\u2019s Delta "
+     "battlefield system, with a preliminary deal on interceptor "
+     "missiles too."),
+]
+
+
+def draw_columns(draw, y):
+    gap = 30
+    col_width = (TEXT_WIDTH - gap) // 2
+    starts = [EDGE_GAP, EDGE_GAP + col_width + gap]
+    bottoms = [y, y]
+    for index, (tag, headline, body) in enumerate(STORIES):
+        column = index % 2
+        bottoms[column] = draw_story(
+            draw, starts[column], bottoms[column], col_width,
+            tag, headline, body)
+    middle = EDGE_GAP + col_width + gap // 2
+    draw.line(
+        [(middle, y), (middle, max(bottoms) - 12)],
+        fill=PALETTE["ink"], width=1)
+    return max(bottoms) + 2
+
+
+def draw_footer(draw, y):
+    rule(draw, y, 1)
+    y += 10
+    extras = (
+        "ALSO:   Pentagon says Canada falls short as a defence partner  ·  "
+        "Democrats probe White House role in Huang\u2019s Nvidia return  ·  "
+        "Pope Francis\u2019 diary released"
+    )
+    small = face("sans_b", 16)
+    for line in break_text(draw, extras, small, TEXT_WIDTH):
+        centred(draw, y, line, small, PALETTE["ink"])
         y += 22
-        head_face = bold_serif(25)
-        for row in split_lines(self.pen, head, head_face, wide):
-            self.pen.text((left, y), row, font=head_face, fill=BLACK)
-            y += 28
-        y += 2
-        text_face = plain_serif(17)
-        for row in split_lines(self.pen, text, text_face, wide):
-            self.pen.text((left, y), row, font=text_face, fill=BLACK)
-            y += 21
-        return y + 10
-
-    def columns(self):
-        gap = 30
-        wide = (INNER - gap) // 2
-        first = SIDE
-        second = SIDE + wide + gap
-        start = self.cursor
-
-        left_stories = [
-            ("UKRAINE",
-             "Russian strike kills 2 in Zaporizhzhia",
-             "An overnight attack hits an apartment block: two dead and "
-             "40 wounded, including four children, the regional governor "
-             "says."),
-            ("GAZA",
-             "Israel kills Hamas security chief",
-             "Airstrikes kill Naeem Abu Nahel, director of Hamas\u2019 "
-             "internal security, and six others, including two police "
-             "officers, medics say."),
-            ("KOREA",
-             "Russian jets enter Seoul\u2019s air zone",
-             "Several Russian aircraft fly into South Korea\u2019s air "
-             "defence identification zone over waters between the "
-             "peninsula and Japan."),
-        ]
-        right_stories = [
-            ("UNITED ARAB EMIRATES",
-             "Bus crash kills 13 in Ras Al Khaimah",
-             "A bus carrying 41 people hits a broken-down truck on Al "
-             "Watan Road in the early hours; 14 more are injured, police "
-             "say."),
-            ("NATO",
-             "Rutte vows space defence after reports",
-             "The alliance will defend against threats in space, its "
-             "chief says, after reports Russia is preparing to launch a "
-             "nuclear-armed satellite."),
-            ("BERLIN",
-             "Germany first to tap Ukraine\u2019s Delta",
-             "Berlin signs a letter of intent for access to Ukraine\u2019s "
-             "Delta battlefield system, with a preliminary deal on "
-             "interceptor missiles too."),
-        ]
-        y = start
-        for tag, head, text in left_stories:
-            y = self.story(first, y, wide, tag, head, text)
-        left_bottom = y
-        y = start
-        for tag, head, text in right_stories:
-            y = self.story(second, y, wide, tag, head, text)
-        right_bottom = y
-        divider = SIDE + wide + gap // 2
-        self.pen.line(
-            [(divider, start), (divider, max(left_bottom, right_bottom) - 12)],
-            fill=BLACK, width=1)
-        self.cursor = max(left_bottom, right_bottom) + 2
-
-    def tail(self):
-        self.rule(self.cursor, 1)
-        self.cursor += 10
-        extras = (
-            "ALSO:   Pentagon says Canada falls short as a defence "
-            "partner  ·  Democrats probe White House role in Huang\u2019s "
-            "Nvidia return  ·  Pope Francis\u2019 diary released"
-        )
-        face = bold_sans(16)
-        for row in split_lines(self.pen, extras, face, INNER):
-            self.put_centred(self.cursor, row, face)
-            self.cursor += 22
-        self.cursor += 2
-        self.put_centred(
-            self.cursor,
-            "Every story above was reported on "
-            "Tuesday 24 November 2026.",
-            italic_serif(15), SLATE)
-        self.cursor += 16
-
-    def finish(self):
-        if self.cursor > EDGE:
-            raise SystemExit(f"page overflowed: cursor at {self.cursor}")
-        self.canvas.save(DESTINATION, format="PNG", optimize=True)
-        size = os.path.getsize(DESTINATION)
-        print(f"wrote {DESTINATION}: {EDGE}x{EDGE}, {size} bytes, "
-              f"cursor ended at y={self.cursor}")
-        if size >= BYTE_CAP:
-            raise SystemExit(
-                f"entry.png is {size} bytes, over the 1 MiB limit")
+    y += 2
+    centred(
+        draw, y,
+        "Every story above was reported on Tuesday 24 November 2026.",
+        face("serif_i", 15), PALETTE["grey"])
+    return y + 16
 
 
-def build():
-    sheet = Sheet()
-    sheet.banner()
-    sheet.headline_block()
-    sheet.picture_strip()
-    sheet.number_bar()
-    sheet.columns()
-    sheet.tail()
-    sheet.finish()
+def main():
+    page = Image.new("RGB", (CANVAS_EDGE, CANVAS_EDGE), PALETTE["paper"])
+    draw = ImageDraw.Draw(page)
+    y = 22
+    y = draw_masthead(draw, y)
+    y = draw_lead(draw, y)
+    y = draw_picture(page, draw, y)
+    y = draw_ticker(draw, y)
+    y = draw_columns(draw, y)
+    y = draw_footer(draw, y)
+    if y > CANVAS_EDGE:
+        raise SystemExit(f"page overflowed: cursor at {y}")
+    page.save(TARGET, format="PNG", optimize=True)
+    size = os.path.getsize(TARGET)
+    print(f"wrote {TARGET}: {CANVAS_EDGE}x{CANVAS_EDGE}, {size} bytes, "
+          f"cursor ended at y={y}")
+    if size >= SIZE_CAP:
+        raise SystemExit(f"entry.png is {size} bytes, over the 1 MiB limit")
 
 
 if __name__ == "__main__":
-    build()
+    main()
